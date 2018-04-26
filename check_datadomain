@@ -1,0 +1,193 @@
+#!/bin/bash
+# See Help below
+# See Version History below
+
+VERB=0
+VERSION=2.1.0
+# major release.feature add.bug fix
+
+LOG=/var/log/icinga2/check_datadomain.log
+PROGPATH=/usr/lib64/nagios/plugins
+. $PROGPATH/utils.sh
+
+while getopts ":t:r:w:d:c:H:m:hv" opt; do
+	case $opt in
+		t)		TYPE=$OPTARG >&2 ;;
+		w)		WARN=$OPTARG >&2 ;;
+		c)		CRIT=$OPTARG >&2 ;;
+		H)		HOST=$OPTARG >&2;;
+		r)		REPL=$OPTARG >&2;;
+		d)		DEST=$OPTARG >&2;;
+		m)		MTREE=$OPTARG >&2;;
+		v)		VERB="1" >&2;;
+		h)		HELP=1 >&2 ;;
+		\?)	echo "Invalid option: -$OPTARG" >&2
+				exit $STATE_UNKNOWN
+		;;
+		:)		echo "Option -$OPTARG requires an argument." >&2
+				exit $STATE_UNKNOWN
+		;;
+	esac
+done
+
+SNMPGET="$(which snmpget) -v 2c -c public -m /usr/share/snmp/mibs/DATA_DOMAIN.mib $HOST"
+SNMPWALK="$(which snmpwalk) -v 2c -c public -m /usr/share/snmp/mibs/DATA_DOMAIN.mib $HOST"
+
+if [ "$VERB" = "1" ]; then
+	echo "" >> $LOG
+	echo $(date +%Y%m%d%H%M%S) >> $LOG
+fi
+
+if [ -z $TYPE ];then
+	HELP=1
+fi
+
+if [ "$TYPE" = "quota" ]; then
+
+# find index of mtree
+	MTREE_OID=$($SNMPWALK DATA-DOMAIN-MIB::quotaCapacityMtreeName|grep $MTREE|awk -F "." '{print substr($2,1,1)}')
+
+	USED=$($SNMPGET DATA-DOMAIN-MIB::quotaCapacityPreCompMiB.$MTREE_OID|awk '{print $4}'|tr -d '"')
+#	SOFT=$($SNMP .1.3.6.1.4.1.19746.1.21.2.1.1.4.$MTREE_OID|awk '{print $4}'|tr -d '"')
+	HARD=$($SNMPGET DATA-DOMAIN-MIB::quotaCapacityHardLimitMiB.$MTREE_OID|awk '{print $4}'|tr -d '"')
+#	HARD2=$($SNMP .1.3.6.1.4.1.19746.1.21.2.1.1.5.$MTREE_OID)
+
+	if [ "$VERB" = "1" ]; then
+		echo Mtree: $MTREE
+		echo Mtree Index: $MTREE_OID
+		echo USED: $USED
+		echo HARD: $HARD
+		echo HARD2: $HARD2
+	fi
+
+	USAGE_PCT=$(($USED * 100 / $HARD))
+#	echo $USAGE_PCT
+#	echo $WARN
+#	echo $CRIT
+
+	if [ "$USAGE_PCT" -le "$WARN" ]; then
+		echo "$USAGE_PCT% used|'Quota Usage'=$USAGE_PCT%;$WARN;$CRIT"
+		exit $STATE_OK
+	elif [ "$USAGE_PCT" -ge "$CRIT" ]; then
+		echo "$USAGE_PCT% used|'Quota Usage'=$USAGE_PCT%;$WARN;$CRIT"
+		exit $STATE_CRITICAL
+	elif [ "$USAGE_PCT" -ge "$WARN" ]; then
+		echo "$USAGE_PCT% used|'Quota Usage'=$USAGE_PCT%;$WARN;$CRIT"
+		exit $STATE_WARNING
+	fi
+fi
+
+if [ "$TYPE" = "repl_behind" ]; then
+
+	if [ "$VERB" = "1" ]; then
+		echo "WARN: $WARN" >> $LOG
+		echo "CRIT: $CRIT" >> $LOG
+		echo "DEST: $DEST $REPL" >> $LOG
+	fi
+
+	if [ "$WARN" -ge $CRIT ]; then
+		echo "attention: warning has to be less than critical"
+		exit $STATE_UNKNOWN
+	fi
+
+	SYNC_AS_OF=$(ssh -q $HOST "replication show detailed-stats mtree://$DEST/data/col1/$REPL"|awk '/Sync/ {print $3" "$4" "$5" "$6}')
+
+	LOCAL_TIMEZONE_DD=$(ssh -q $HOST "system show date"| awk '{print $5}')
+
+	SYNC_AS_OF_SECONDS=$(date -d "$SYNC_AS_OF $LOCAL_TIMEZONE_DD" +%s)
+	NOW=$(date +%s)
+	DIFFERENCE_SECONDS=$(( ($NOW - $SYNC_AS_OF_SECONDS) ))
+
+	if [ $VERB ]; then
+		echo "SYNC_AS_OF: $SYNC_AS_OF" >> $LOG
+		echo "LOCAL_TIMEZONE_DD: $LOCAL_TIMEZONE_DD" >> $LOG
+		echo "SYNC_AS_OF: $SYNC_AS_OF" >> $LOG
+		echo "SYNC_AS_OF_SECONDS: $SYNC_AS_OF_SECONDS" >> $LOG
+		echo "NOW: $NOW" >> $LOG
+		echo "DIFFERENCE_SECONDS: $DIFFERENCE_SECONDS" >> $LOG
+	fi
+
+
+#	if [ $DIFFERENCE_SECONDS -gt 86400 ]; then
+#		DIFFERNCE_DATE=$(( ($DIFFERENCE_SECONDS / 86400) ))
+#		UNIT="days"
+#	else 
+#		DIFFERNCE_DATE=$(( ($DIFFERENCE_SECONDS / 3600) ))
+#		UNIT="hours"
+#	fi
+
+
+	echo "$REPL Synced as of $SYNC_AS_OF $LOCAL_TIMEZONE_DD|'Sync difference'=${DIFFERENCE_SECONDS}sec;$WARN;$CRIT;0;$DIFFERNCE_SECONDS"
+
+	if [ $DIFFERENCE_SECONDS -ge $CRIT ]; then
+		exit $STATE_CRITICAL
+	elif [ $DIFFERENCE_SECONDS -ge $WARN ]; then
+		exit $STATE_WARNING
+	elif [ $DIFFERENCE_SECONDS -lt $WARN ]; then
+		exit $STATE_OK
+	else
+		exit $STATE_UNKNOWN
+	fi
+fi	
+
+if [ "$TYPE" = "repl_perf" ]; then
+
+	if [ "$WARN" -le $CRIT ]; then
+		echo "attention: warning has to be more than critical"
+		exit $STATE_UNKNOWN
+	fi
+
+
+	RESULT_REPL=$(ssh -q $HOST "replication show performance mtree://$DEST/data/col1/$REPL count 1"|awk '{printf ("%s\t", $2)}'|awk '{print $5}')
+
+
+	if [ ! $RESULT_REPL ];
+		then RESULT_REPL=0
+		echo "Replication Performance $REPL = ${RESULT_REPL}KB/s|'$REPL'=${RESULT_REPL}KB/s;$WARN;$CRIT;0;$RESULT_REPL"
+	else
+
+	echo "Replication Performance $REPL = ${RESULT_REPL}KB/s|'$REPL'=${RESULT_REPL}KB/s;$WARN;$CRIT;0;$RESULT_REPL"
+
+	if [ $RESULT_REPL -eq 0 ]; then
+		exit $STATE_OK
+	elif [ $RESULT_REPL -le $CRIT ]; then
+		exit $STATE_CRITICAL
+	elif [ $RESULT_REPL -le $WARN ]; then
+		exit $STATE_WARNING
+	elif [ $RESULT_REPL -ge $WARN ]; then
+		exit $STATE_OK
+	else
+		exit $STATE_UNKNOWN
+	fi
+	fi
+fi	
+
+if [ "$TYPE" = "repl_bytes_remain" ]; then
+
+	if [ "$WARN" -gt $CRIT ]; then
+		echo "attention: warning has to be less than critical"
+		exit $STATE_UNKNOWN
+	fi
+
+	RESULT_BYTES_REMAIN=$(ssh -q $HOST "replication show detailed-stats mtree://$DEST/data/col1/$REPL" | awk -F ":" '/Pre-compressed bytes remaining/ {print $2}'|sed "s/ //g"|sed "s/,//g")
+#	MTREE=$(echo $REPL|awk -F"/" '{print $NF}')
+	echo "To Replicate for $REPL|'$REPL Bytes Remaining'=${RESULT_BYTES_REMAIN}B;$WARN;$CRIT;0;$RESULT_BYTES_REMAIN"
+fi
+
+if [ $HELP ]; then
+	echo "Replication Performance - Replication in KB/s"
+	echo "check_datadomain -H HOST -t repl_perf -w N -c N-1 -r MTREE -d DESTINATION"
+	echo "\n"
+	echo "Replication Bytes Remaining"
+	echo "check_datadomain -H HOST -t repl_bytes_remain -w N -c N+1 -r MTREE -d DESTINATION"
+fi
+
+# Version History
+# 20161110 0.1: start
+# 20161116 0.2.0 added destination, changed from rctx to fill mtree name
+# 20161117 1.0.0 added help text
+# 20170314 2.0.0 added sync check how far behind
+# 20170424 2.0.1 added "0" reply if replication performance does not deliver anything
+# 20170427 2.0.2 switched from "date" to "system show date". "date" has been removed in 6.x
+# 20170901 2.0.3 fixed bug in time differnce calculation for replicaton behind. Local time zone of DD hasnt been taken into acount
+# 20180425 2.1.0 DD shifts mtree index when new mtree created. Implemented dynamic index detection based on name. Changed option -o for OID to -m for MTREE
