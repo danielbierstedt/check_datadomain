@@ -19,11 +19,11 @@ This checks how far a replication is behind. Assume, there is a replication set 
 
 This is about replication performance, the result is KB/s.
 
-Explain what these tests test and why
+```
+./check_datadomain -H HOST -t repl_perf -w 40 -c 30 -r MTREE -d TARGET
 
 ```
-Give an example
-```
+
 
 ### And coding style tests
 
