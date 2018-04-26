@@ -15,13 +15,16 @@ Several things need to be done on Data Domain to get this going. First, you need
 
 This checks how far a replication is behind. Assume, there is a replication set up from one Data Domain onto another. You might want to know how far the replicaion is, or the other way around, how much is missing. This check uses the Data Domain predicion to guess how long it would take to get everything up2date. The result is expressed in seconds.
 
+```
+./check_datadomain -H HOST -r MTREE -t repl_behind -w 86400 -c 172800 -d DESTINATION
+```
+
 ### repl_perf
 
 This is about replication performance, the result is KB/s.
 
 ```
-./check_datadomain -H HOST -t repl_perf -w 40 -c 30 -r MTREE -d TARGET
-
+./check_datadomain -H HOST -t repl_perf -w 40 -c 30 -r MTREE -d DESTINATION
 ```
 
 
@@ -53,16 +56,9 @@ We use [SemVer](http://semver.org/) for versioning. For the versions available, 
 
 ## Authors
 
-* **Billie Thompson** - *Initial work* - [PurpleBooth](https://github.com/PurpleBooth)
-
-See also the list of [contributors](https://github.com/your/project/contributors) who participated in this project.
+* **Daniel Bierstedt**
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details
+This project is licensed under the GPLV3 License - see the [LICENSE.md](LICENSE.md) file for details
 
-## Acknowledgments
-
-* Hat tip to anyone who's code was used
-* Inspiration
-* etc
